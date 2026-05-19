@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/index.js",
+      "use": "@vercel/node"
+    },
+    {
+      "src": "public/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/analisis",
+      "dest": "api/index.js"
+    },
+    {
+      "src": "/partidos",
+      "dest": "api/index.js"
+    },
+    {
+      "src": "/buscar-partido",
+      "dest": "api/index.js"
+    },
+    {
+      "src": "/fixtures-liga",
+      "dest": "api/index.js"
+    },
+    {
+      "src": "/equipo/(.*)",
+      "dest": "api/index.js"
+    },
+    {
+      "src": "/app.html",
+      "dest": "public/app.html"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "public/$1"
+    }
+  ]
+}

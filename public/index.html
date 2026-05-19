@@ -1,0 +1,274 @@
+// ============================================
+// PROFEBOT — ANALIZADOR MUNDIAL 2026
+// Backend limpio y enfocado
+// ============================================
+
+require("dotenv").config();
+
+const express = require("express");
+const axios = require("axios");
+const Anthropic = require("@anthropic-ai/sdk");
+
+const app = express();
+app.use(express.json());
+
+// CORS para que el frontend pueda llamar al backend
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+
+const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ── HELPER: llamar a API-Football ──
+async function football(endpoint, params = {}) {
+  const res = await axios.get(`https://v3.football.api-sports.io/${endpoint}`, {
+    headers: { "x-apisports-key": process.env.FOOTBALL_API_KEY },
+    params,
+  });
+  return res.data.response;
+}
+
+// ============================================
+// GET /partidos — Próximos partidos del Mundial
+// ============================================
+app.get("/partidos", async (req, res) => {
+  try {
+    const data = await football("fixtures", {
+      league: 1,
+      season: 2026,
+      next: 20,
+    });
+
+    const partidos = data.map((f) => ({
+      id: f.fixture.id,
+      fecha: f.fixture.date,
+      estadio: f.fixture.venue?.name,
+      ciudad: f.fixture.venue?.city,
+      equipo1: { nombre: f.teams.home.name, logo: f.teams.home.logo, id: f.teams.home.id },
+      equipo2: { nombre: f.teams.away.name, logo: f.teams.away.logo, id: f.teams.away.id },
+      estado: f.fixture.status.short,
+      ronda: f.league.round,
+    }));
+
+    res.json({ partidos });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// GET /equipo/:id/stats — Estadísticas del equipo en el Mundial
+// ============================================
+app.get("/equipo/:id/stats", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const stats = await football("teams/statistics", {
+      league: 1,
+      season: 2026,
+      team: id,
+    });
+    res.json({ stats: stats[0] || stats });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// GET /equipo/:id/jugadores — Jugadores del equipo con stats
+// ============================================
+app.get("/equipo/:id/jugadores", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const data = await football("players", {
+      league: 1,
+      season: 2026,
+      team: id,
+    });
+
+    const jugadores = data.map((p) => ({
+      id: p.player.id,
+      nombre: p.player.name,
+      edad: p.player.age,
+      nacionalidad: p.player.nationality,
+      foto: p.player.photo,
+      posicion: p.statistics[0]?.games?.position,
+      stats: {
+        partidos: p.statistics[0]?.games?.appearences || 0,
+        goles: p.statistics[0]?.goals?.total || 0,
+        asistencias: p.statistics[0]?.goals?.assists || 0,
+        minutos: p.statistics[0]?.games?.minutes || 0,
+        rating: p.statistics[0]?.games?.rating || null,
+        tarjetas_amarillas: p.statistics[0]?.cards?.yellow || 0,
+        tarjetas_rojas: p.statistics[0]?.cards?.red || 0,
+        tiros_al_arco: p.statistics[0]?.shots?.on || 0,
+        pases_clave: p.statistics[0]?.passes?.key || 0,
+        duelos_ganados: p.statistics[0]?.duels?.won || 0,
+      },
+    }));
+
+    jugadores.sort((a, b) => (b.stats.rating || 0) - (a.stats.rating || 0));
+    res.json({ jugadores });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// GET /head2head/:id1/:id2 — Historial entre dos equipos
+// ============================================
+app.get("/head2head/:id1/:id2", async (req, res) => {
+  try {
+    const { id1, id2 } = req.params;
+    const data = await football("fixtures/headtohead", {
+      h2h: `${id1}-${id2}`,
+      last: 10,
+    });
+
+    const partidos = data.map((f) => ({
+      fecha: f.fixture.date,
+      local: f.teams.home.name,
+      visitante: f.teams.away.name,
+      marcador: `${f.goals.home} - ${f.goals.away}`,
+      ganador: f.teams.home.winner
+        ? f.teams.home.name
+        : f.teams.away.winner
+        ? f.teams.away.name
+        : "Empate",
+    }));
+
+    res.json({ historial: partidos });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============================================
+// POST /analisis — Análisis completo de un partido con IA
+// Body: { equipo1, equipo2, id1, id2 }
+// ============================================
+app.post("/analisis", async (req, res) => {
+  const { equipo1, equipo2, id1, id2 } = req.body;
+
+  if (!equipo1 || !equipo2) {
+    return res.status(400).json({ error: "Faltan equipo1 y equipo2" });
+  }
+
+  try {
+    const [statsE1, statsE2, h2h, jugadoresE1, jugadoresE2] = await Promise.allSettled([
+      id1 ? football("teams/statistics", { league: 1, season: 2026, team: id1 }) : Promise.resolve(null),
+      id2 ? football("teams/statistics", { league: 1, season: 2026, team: id2 }) : Promise.resolve(null),
+      id1 && id2 ? football("fixtures/headtohead", { h2h: `${id1}-${id2}`, last: 5 }) : Promise.resolve([]),
+      id1 ? football("players", { league: 1, season: 2026, team: id1 }) : Promise.resolve([]),
+      id2 ? football("players", { league: 1, season: 2026, team: id2 }) : Promise.resolve([]),
+    ]);
+
+    const topJugadores = (jugadores) => {
+      if (!jugadores?.value?.length) return [];
+      return jugadores.value
+        .map((p) => ({
+          nombre: p.player.name,
+          posicion: p.statistics[0]?.games?.position,
+          goles: p.statistics[0]?.goals?.total || 0,
+          asistencias: p.statistics[0]?.goals?.assists || 0,
+          rating: parseFloat(p.statistics[0]?.games?.rating) || 0,
+        }))
+        .sort((a, b) => b.rating - a.rating)
+        .slice(0, 5);
+    };
+
+    const contexto = {
+      equipo1: { nombre: equipo1, stats: statsE1?.value?.[0] || null, topJugadores: topJugadores(jugadoresE1) },
+      equipo2: { nombre: equipo2, stats: statsE2?.value?.[0] || null, topJugadores: topJugadores(jugadoresE2) },
+      historial: h2h?.value?.slice(0, 5).map(f => ({
+        fecha: f.fixture.date,
+        local: f.teams.home.name,
+        visitante: f.teams.away.name,
+        marcador: `${f.goals.home}-${f.goals.away}`,
+        ganador: f.teams.home.winner ? f.teams.home.name : f.teams.away.winner ? f.teams.away.name : "Empate"
+      })) || [],
+    };
+
+    const mensaje = await anthropic.messages.create({
+      model: "claude-sonnet-4-5",
+      max_tokens: 1500,
+      messages: [
+        {
+          role: "user",
+          content: `Eres el mejor analista de fútbol del mundo. Genera un análisis PROFUNDO y DETALLADO del siguiente partido del Mundial 2026 en español.
+
+PARTIDO: ${equipo1} vs ${equipo2}
+
+DATOS DISPONIBLES:
+${JSON.stringify(contexto, null, 2)}
+
+Responde ÚNICAMENTE con este JSON válido, sin texto adicional ni backticks:
+
+{
+  "resumen": "2-3 oraciones que resuman el partido de forma emocionante",
+  "forma_reciente": {
+    "equipo1": "análisis de su forma reciente",
+    "equipo2": "análisis de su forma reciente"
+  },
+  "fortalezas": {
+    "equipo1": ["fortaleza 1", "fortaleza 2", "fortaleza 3"],
+    "equipo2": ["fortaleza 1", "fortaleza 2", "fortaleza 3"]
+  },
+  "debilidades": {
+    "equipo1": ["debilidad 1", "debilidad 2"],
+    "equipo2": ["debilidad 1", "debilidad 2"]
+  },
+  "jugadores_clave": {
+    "equipo1": [{"nombre": "X", "razon": "por qué es clave"}],
+    "equipo2": [{"nombre": "X", "razon": "por qué es clave"}]
+  },
+  "factores_clave": ["factor 1", "factor 2", "factor 3"],
+  "probabilidades": {
+    "equipo1": 45,
+    "empate": 25,
+    "equipo2": 30
+  },
+  "marcador_probable": "2-1",
+  "prediccion": "párrafo de 3-4 oraciones con la predicción final",
+  "nivel_confianza": 72
+}`,
+        },
+      ],
+    });
+
+    const texto = mensaje.content[0].text.trim();
+    let analisis;
+    try {
+      analisis = JSON.parse(texto);
+    } catch {
+      analisis = { prediccion: texto, probabilidades: { equipo1: 40, empate: 25, equipo2: 35 } };
+    }
+
+    res.json({
+      partido: `${equipo1} vs ${equipo2}`,
+      analisis,
+      datos: contexto,
+      generado: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error en /analisis:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Health check ──
+app.get("/", (req, res) => {
+  res.json({
+    app: "ProfeBot — Analizador Mundial 2026",
+    version: "2.0",
+    endpoints: ["/partidos", "/analisis", "/equipo/:id/stats", "/equipo/:id/jugadores", "/head2head/:id1/:id2"],
+  });
+});
+
+const PUERTO = process.env.PORT || 3000;
+app.listen(PUERTO, () => {
+  console.log(`🚀 ProfeBot v2.0 corriendo en http://localhost:${PUERTO}`);
+});
