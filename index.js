@@ -112,6 +112,45 @@ app.get("/partidos", async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Funcion para parsear respuesta de Claude de forma robusta
+function parsearRespuestaIA(texto) {
+  // Limpiar backticks
+  let txt = texto.trim()
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/```\s*$/g, '')
+    .trim();
+
+  // Extraer el JSON mas externo
+  const match = txt.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+
+  try {
+    const parsed = JSON.parse(match[0]);
+    
+    // Si el campo prediccion contiene JSON, extraer los campos correctos
+    if (parsed.prediccion && typeof parsed.prediccion === 'string') {
+      const predTxt = parsed.prediccion.trim()
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```\s*$/g, '')
+        .trim();
+      
+      if (predTxt.startsWith('{')) {
+        try {
+          const inner = JSON.parse(predTxt.match(/\{[\s\S]*\}/)[0]);
+          // Devolver el JSON interno que tiene todos los campos correctos
+          return inner;
+        } catch {}
+      }
+    }
+    
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 // POST /analisis
 app.post("/analisis", async (req, res) => {
   const { equipo1, equipo2, id1, id2, ligaId, season, fecha, liga, ronda, estadio, fechaPartido } = req.body;
@@ -154,35 +193,30 @@ app.post("/analisis", async (req, res) => {
     const mensaje = await anthropic.messages.create({
       model: "claude-sonnet-4-5",
       max_tokens: 1500,
-      system: "Eres un analista experto de futbol. Respondes SOLO con JSON valido. Nunca escribas texto fuera del JSON. Nunca uses backticks. Tu respuesta empieza con { y termina con }.",
+      system: "Eres un analista experto de futbol. Respondes SOLO con JSON valido. Tu respuesta empieza con { y termina con }. Nunca uses backticks ni markdown.",
       messages: [{
         role: "user",
         content: `Analiza este partido: ${equipo1} vs ${equipo2} | ${liga || ''} ${ronda || ''} | ${fechaPartido || fecha || ''}
 
 Datos reales:
-- Forma ${equipo1} (W=ganó, D=empate, L=perdió): ${JSON.stringify(formaE1)}
+- Forma ${equipo1}: ${JSON.stringify(formaE1)}
 - Forma ${equipo2}: ${JSON.stringify(formaE2)}
-- Stats temporada ${equipo1}: ${JSON.stringify(procesarStats(statsE1))}
-- Stats temporada ${equipo2}: ${JSON.stringify(procesarStats(statsE2))}
+- Stats ${equipo1}: ${JSON.stringify(procesarStats(statsE1))}
+- Stats ${equipo2}: ${JSON.stringify(procesarStats(statsE2))}
 - Jugadores ${equipo1}: ${jugadoresE1.map(j => j.nombre + '(' + j.goles + 'g,' + j.asistencias + 'a,r:' + j.rating + ')').join(', ')}
 - Jugadores ${equipo2}: ${jugadoresE2.map(j => j.nombre + '(' + j.goles + 'g,' + j.asistencias + 'a,r:' + j.rating + ')').join(', ')}
-- Historial: ${JSON.stringify(historial)}
+- H2H: ${JSON.stringify(historial)}
 
-Responde con este JSON:
-{"resumen":"texto","forma_reciente":{"equipo1":"texto","equipo2":"texto"},"fortalezas":{"equipo1":["a","b","c"],"equipo2":["a","b","c"]},"debilidades":{"equipo1":["a","b"],"equipo2":["a","b"]},"jugadores_clave":{"equipo1":[{"nombre":"N","razon":"R"}],"equipo2":[{"nombre":"N","razon":"R"}]},"factores_clave":["a","b","c"],"probabilidades":{"equipo1":45,"empate":25,"equipo2":30},"marcador_probable":"2-1","prediccion":"texto","nivel_confianza":72}`
+JSON de respuesta:
+{"resumen":"texto","forma_reciente":{"equipo1":"texto","equipo2":"texto"},"fortalezas":{"equipo1":["a","b","c"],"equipo2":["a","b","c"]},"debilidades":{"equipo1":["a","b"],"equipo2":["a","b"]},"jugadores_clave":{"equipo1":[{"nombre":"N","razon":"R"}],"equipo2":[{"nombre":"N","razon":"R"}]},"factores_clave":["a","b","c"],"probabilidades":{"equipo1":45,"empate":25,"equipo2":30},"marcador_probable":"2-1","prediccion":"texto prediccion final","nivel_confianza":72}`
       }],
     });
 
-    let txt = mensaje.content[0].text.trim();
-    // Limpiar backticks y marcadores de codigo
-    txt = txt.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/g, '').trim();
-    const jsonMatch = txt.match(/\{[\s\S]*\}/);
-    let analisis;
-    try {
-      analisis = JSON.parse(jsonMatch ? jsonMatch[0] : txt);
-    } catch {
-      analisis = { prediccion: txt.slice(0, 300), probabilidades: { equipo1: 40, empate: 25, equipo2: 35 }, nivel_confianza: 60 };
-    }
+    const analisis = parsearRespuestaIA(mensaje.content[0].text) || {
+      prediccion: mensaje.content[0].text.slice(0, 300),
+      probabilidades: { equipo1: 40, empate: 25, equipo2: 35 },
+      nivel_confianza: 60
+    };
 
     res.json({ partido: `${equipo1} vs ${equipo2}`, analisis, generado: new Date().toISOString() });
 
@@ -193,8 +227,8 @@ Responde con este JSON:
 });
 
 app.get("/", (req, res) => {
-  res.json({ app: "ProfeBot", version: "3.4", plan: "PRO" });
+  res.json({ app: "ProfeBot", version: "3.5", plan: "PRO" });
 });
 
 const PUERTO = process.env.PORT || 3000;
-app.listen(PUERTO, () => console.log(`ProfeBot v3.4 corriendo en puerto ${PUERTO}`));
+app.listen(PUERTO, () => console.log(`ProfeBot v3.5 corriendo en puerto ${PUERTO}`));
