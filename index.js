@@ -160,7 +160,7 @@ Responde con el marcador ###JSON### seguido del analisis en JSON. Ejemplo:
 
     const txt = mensaje.content[0].text;
     const parts = txt.split('###JSON###');
-    const jsonStr = parts.length > 1 ? parts[1].trim() : txt.trim();
+    const jsonStr = parts.length > 1 ? parts[parts.length - 1].trim() : txt.trim();
     const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
 
     let analisis;
