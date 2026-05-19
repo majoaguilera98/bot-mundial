@@ -173,7 +173,9 @@ Responde con este JSON:
       }],
     });
 
-    const txt = mensaje.content[0].text.trim();
+    let txt = mensaje.content[0].text.trim();
+    // Limpiar backticks y marcadores de codigo
+    txt = txt.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/g, '').trim();
     const jsonMatch = txt.match(/\{[\s\S]*\}/);
     let analisis;
     try {
